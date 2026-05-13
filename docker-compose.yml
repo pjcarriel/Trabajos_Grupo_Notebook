@@ -1,0 +1,306 @@
+networks:
+  mongo_net:
+    driver: bridge
+
+volumes:
+  mongo1_data:
+  mongo2_data:
+  mongo3_data:
+  configsvr_data:
+  shard1_data:
+  shard2_data:
+
+services:
+
+  # ─────────────────────────────────────────────────────────
+  # REPLICA SET — 3 nodos (PRIMARY + 2 SECONDARY)
+  # ─────────────────────────────────────────────────────────
+
+  mongo1:
+    image: mongo:7.0
+    container_name: mongo1
+    hostname: mongo1
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    ports:
+      - "27020:27017"
+    networks:
+      - mongo_net
+    volumes:
+      - mongo1_data:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  mongo2:
+    image: mongo:7.0
+    container_name: mongo2
+    hostname: mongo2
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    ports:
+      - "27021:27017"
+    networks:
+      - mongo_net
+    volumes:
+      - mongo2_data:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  mongo3:
+    image: mongo:7.0
+    container_name: mongo3
+    hostname: mongo3
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    ports:
+      - "27022:27017"
+    networks:
+      - mongo_net
+    volumes:
+      - mongo3_data:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  mongo-init:
+    image: mongo:7.0
+    container_name: mongo-init
+    depends_on:
+      mongo1:
+        condition: service_healthy
+      mongo2:
+        condition: service_healthy
+      mongo3:
+        condition: service_healthy
+    networks:
+      - mongo_net
+    restart: on-failure
+    entrypoint: >
+      bash -c "
+        echo '⏳ Iniciando Replica Set rs0...' &&
+        mongosh --host mongo1:27017 --eval '
+          rs.initiate({
+            _id: \"rs0\",
+            members: [
+              { _id: 0, host: \"mongo1:27017\", priority: 10 },
+              { _id: 1, host: \"mongo2:27017\", priority: 1  },
+              { _id: 2, host: \"mongo3:27017\", priority: 1  }
+            ]
+          })
+        ' &&
+        echo '✅ rs0 iniciado — mongo1 será PRIMARY'
+      "
+
+  # ─────────────────────────────────────────────────────────
+  # CONFIG SERVER
+  # ─────────────────────────────────────────────────────────
+
+  configsvr:
+    image: mongo:7.0
+    container_name: configsvr
+    hostname: configsvr
+    command: mongod --configsvr --replSet configRS --bind_ip_all --port 27017
+    ports:
+      - "27023:27017"
+    networks:
+      - mongo_net
+    volumes:
+      - configsvr_data:/data/configdb
+    restart: unless-stopped
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  configsvr-init:
+    image: mongo:7.0
+    container_name: configsvr-init
+    depends_on:
+      configsvr:
+        condition: service_healthy
+    networks:
+      - mongo_net
+    restart: on-failure
+    entrypoint: >
+      bash -c "
+        echo '⏳ Iniciando Config Server...' &&
+        mongosh --host configsvr:27017 --eval '
+          rs.initiate({
+            _id: \"configRS\",
+            configsvr: true,
+            members: [{ _id: 0, host: \"configsvr:27017\" }]
+          })
+        ' &&
+        echo '✅ configRS listo'
+      "
+
+  # ─────────────────────────────────────────────────────────
+  # SHARD 1
+  # ─────────────────────────────────────────────────────────
+
+  shard1:
+    image: mongo:7.0
+    container_name: shard1
+    hostname: shard1
+    command: mongod --shardsvr --replSet shard1RS --bind_ip_all --port 27017
+    ports:
+      - "27024:27017"
+    networks:
+      - mongo_net
+    volumes:
+      - shard1_data:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  shard1-init:
+    image: mongo:7.0
+    container_name: shard1-init
+    depends_on:
+      shard1:
+        condition: service_healthy
+    networks:
+      - mongo_net
+    restart: on-failure
+    entrypoint: >
+      bash -c "
+        echo '⏳ Iniciando Shard 1...' &&
+        mongosh --host shard1:27017 --eval '
+          rs.initiate({
+            _id: \"shard1RS\",
+            members: [{ _id: 0, host: \"shard1:27017\" }]
+          })
+        ' &&
+        echo '✅ shard1RS listo'
+      "
+
+  # ─────────────────────────────────────────────────────────
+  # SHARD 2
+  # ─────────────────────────────────────────────────────────
+
+  shard2:
+    image: mongo:7.0
+    container_name: shard2
+    hostname: shard2
+    command: mongod --shardsvr --replSet shard2RS --bind_ip_all --port 27017
+    ports:
+      - "27025:27017"
+    networks:
+      - mongo_net
+    volumes:
+      - shard2_data:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  shard2-init:
+    image: mongo:7.0
+    container_name: shard2-init
+    depends_on:
+      shard2:
+        condition: service_healthy
+    networks:
+      - mongo_net
+    restart: on-failure
+    entrypoint: >
+      bash -c "
+        echo '⏳ Iniciando Shard 2...' &&
+        mongosh --host shard2:27017 --eval '
+          rs.initiate({
+            _id: \"shard2RS\",
+            members: [{ _id: 0, host: \"shard2:27017\" }]
+          })
+        ' &&
+        echo '✅ shard2RS listo'
+      "
+
+  # ─────────────────────────────────────────────────────────
+  # MONGOS — Router
+  # ─────────────────────────────────────────────────────────
+
+  mongos:
+    image: mongo:7.0
+    container_name: mongos
+    hostname: mongos
+    command: >
+      mongos
+      --configdb configRS/configsvr:27017
+      --bind_ip_all
+      --port 27017
+    ports:
+      - "27026:27017"
+    networks:
+      - mongo_net
+    depends_on:
+      - configsvr
+      - shard1
+      - shard2
+    restart: unless-stopped
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  mongos-setup:
+    image: mongo:7.0
+    container_name: mongos-setup
+    depends_on:
+      mongos:
+        condition: service_healthy
+    networks:
+      - mongo_net
+    restart: on-failure
+    entrypoint: >
+      bash -c "
+        echo '⏳ Registrando shards en mongos...' &&
+        mongosh --host mongos:27017 --eval '
+          sh.addShard(\"shard1RS/shard1:27017\");
+          sh.addShard(\"shard2RS/shard2:27017\");
+          sh.enableSharding(\"GA_Analytics_DB\");
+          sh.shardCollection(\"GA_Analytics_DB.sessions\", { visitId: \"hashed\" });
+          print(\"✅ Sharding activo — shard key: visitId hashed\");
+        '
+      "
+
+  # ─────────────────────────────────────────────────────────
+  # MONGO EXPRESS — UI
+  # ─────────────────────────────────────────────────────────
+
+  mongo-express:
+    image: mongo-express:latest
+    container_name: mongo-express
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_URL: "mongodb://mongo1:27017,mongo2:27017,mongo3:27017/?replicaSet=rs0"
+      ME_CONFIG_BASICAUTH: "false"
+    networks:
+      - mongo_net
+    depends_on:
+      mongo1:
+        condition: service_healthy
+    restart: unless-stopped
+
